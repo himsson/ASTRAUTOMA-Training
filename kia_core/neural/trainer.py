@@ -544,7 +544,9 @@ class NeuralTrainer:
                 log.info("[конструктор] эпизодов %d/%d | средняя награда %.2f | "
                          "годных сборок %d", report.episodes, episodes,
                          report.mean_return, report.successes)
-                self.brain.save()
+                if time.time() - last_save > SAVE_INTERVAL:
+                    self.brain.save()
+                    last_save = time.time()
             if progress is not None:
                 progress(report)
 
@@ -597,6 +599,7 @@ class NeuralTrainer:
         report = TrainingReport(mode=f"математик: {stage.title}",
                                 stage=stage.number)
         started = time.time()
+        last_save = started
         net = agent.net
         # Отдельный оптимизатор: у агента свой, настроенный под PPO с очень
         # малым шагом. Регрессии нужен шаг побольше, а трогать общий нельзя —
@@ -637,7 +640,13 @@ class NeuralTrainer:
                 log.info("[математик] %s: задач %d/%d | ошибка %.4f | "
                          "решено %.1f %%", stage.title, done_tasks, episodes,
                          float(loss.item()), exam["accuracy"] * 100.0)
-                self.brain.save()
+                # Писать веса на каждый отчёт нельзя: итерация здесь
+                # занимает доли секунды, и за ночь файл в два мегабайта
+                # ушёл бы на диск сотни тысяч раз. Отчёт частый, запись
+                # редкая — как в полётном цикле.
+                if time.time() - last_save > SAVE_INTERVAL:
+                    self.brain.save()
+                    last_save = time.time()
             if progress is not None:
                 progress(report)
 
