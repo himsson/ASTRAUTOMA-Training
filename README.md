@@ -1,5 +1,7 @@
 # ASTRAUTOMA Training
 
+*[Русская версия](README.ru.md)*
+
 The training side of [ASTRAUTOMA](https://github.com/himsson/ASTRAUTOMA). This is what produces
 the weights the app loads — simulators, the PPO loop, the exams and the benchmark stand.
 
