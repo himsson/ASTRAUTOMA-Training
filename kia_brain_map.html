@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>KIA — карта мозга</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121922; --line: #1e2a38;
+    --ink: #d8e2ee; --dim: #7b8ea6; --hot: #ffb454;
+    --cold: #2f4a63; --good: #5ac97a; --bad: #e0655f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    padding: 12px 20px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 24px; align-items: baseline; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .04em; }
+  header .stat { color: var(--dim); font-size: 13px; }
+  header .stat b { color: var(--ink); font-weight: 600; }
+  #live { color: var(--good); }
+  #live.stale { color: var(--bad); }
+  main { display: grid; grid-template-columns: 1fr 320px; height: calc(100vh - 53px); }
+  #canvas { position: relative; overflow: hidden; }
+  aside {
+    border-left: 1px solid var(--line); background: var(--panel);
+    padding: 16px; overflow-y: auto;
+  }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+             color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  aside h2:not(:first-child) { margin-top: 22px; }
+  .skill { margin-bottom: 10px; }
+  .skill .row { display: flex; justify-content: space-between; gap: 8px; }
+  .skill .name { font-size: 13px; }
+  .skill .count { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; }
+  .bar span { display: block; height: 100%; background: var(--good); border-radius: 2px; }
+  .fail { display: flex; justify-content: space-between; font-size: 12px;
+          color: var(--dim); padding: 2px 0; }
+  #tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: #05080c; border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; max-width: 320px; font-size: 13px; z-index: 10;
+    box-shadow: 0 8px 24px rgba(0,0,0,.6);
+  }
+  #tip b { color: var(--hot); }
+  #tip .hint { color: var(--dim); font-size: 12px; display: block; margin-top: 6px; }
+  #tip table { margin-top: 6px; border-spacing: 0; font-size: 12px; }
+  #tip td { padding: 1px 0; }
+  #tip td:first-child { color: var(--dim); padding-right: 12px; }
+  circle.node { cursor: pointer; transition: r .2s; }
+  circle.node:hover { stroke: var(--hot); stroke-width: 2; }
+  text { fill: var(--dim); font-size: 11px; pointer-events: none; }
+  text.big { fill: var(--ink); font-size: 12px; }
+  #empty { padding: 40px; color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>KIA · КАРТА МОЗГА</h1>
+  <span class="stat">ступень <b id="stage">—</b></span>
+  <span class="stat">решений <b id="decisions">—</b></span>
+  <span class="stat">эпизодов <b id="episodes">—</b></span>
+  <span class="stat">средняя награда <b id="reward">—</b></span>
+  <span class="stat">орбит за прогон <b id="orbits">—</b></span>
+  <span class="stat">весов <b id="weights">—</b></span>
+  <span class="stat" id="live">ожидание данных…</span>
+</header>
+<main>
+  <div id="canvas"><div id="empty">Обучение не запущено — карте нечего показывать.<br>
+    Запустите пульт → 0 (автономная эволюция) и обновите страницу.</div></div>
+  <aside>
+    <h2>Что уже умеет</h2>
+    <div id="skills"><div class="fail">пока ничего не подтверждено</div></div>
+    <h2>На чём срывается</h2>
+    <div id="failures"><div class="fail">нет данных</div></div>
+    <h2>Оси управления</h2>
+    <div id="sigmas"><div class="fail">нет данных</div></div>
+  </aside>
+</main>
+<div id="tip"></div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const tip = document.getElementById("tip");
+let lastUpdated = null, staleTicks = 0;
+
+function el(tag, attrs) {
+  const node = document.createElementNS(NS, tag);
+  for (const key in attrs) node.setAttribute(key, attrs[key]);
+  return node;
+}
+function num(value, digits) {
+  if (value === null || value === undefined) return "—";
+  return Number(value).toFixed(digits === undefined ? 2 : digits);
+}
+function showTip(event, html) {
+  tip.innerHTML = html;
+  tip.style.opacity = 1;
+  const pad = 16;
+  let x = event.clientX + pad, y = event.clientY + pad;
+  const box = tip.getBoundingClientRect();
+  if (x + box.width > innerWidth) x = event.clientX - box.width - pad;
+  if (y + box.height > innerHeight) y = event.clientY - box.height - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.opacity = 0; }
+
+// Цвет входа: чем больше внимание сети, тем горячее кружок
+function heat(weight) {
+  const t = Math.max(0, Math.min(1, (weight - 0.3) / 1.9));
+  const cold = [47, 74, 99], hot = [255, 180, 84];
+  const mix = cold.map((c, i) => Math.round(c + (hot[i] - c) * t));
+  return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+}
+
+function draw(data) {
+  const host = document.getElementById("canvas");
+  host.innerHTML = "";
+  const width = host.clientWidth, height = host.clientHeight;
+  const svg = el("svg", {width: width, height: height});
+  host.appendChild(svg);
+
+  const inputs = data.inputs || [], layers = data.layers || [],
+        outputs = data.outputs || [];
+  const colX = [width * 0.13, width * 0.40, width * 0.62, width * 0.86];
+  const top = 60, bottom = height - 40;
+  const place = (list, x) => list.map((item, i) => ({
+    ...item, x: x,
+    y: top + (list.length === 1 ? (bottom - top) / 2
+        : i * (bottom - top) / (list.length - 1))
+  }));
+
+  const inNodes = place(inputs, colX[0]);
+  const midNodes = layers.map((layer, i) => ({
+    ...layer, x: colX[1 + i], y: (top + bottom) / 2
+  }));
+  const outNodes = place(outputs, colX[3]);
+
+  const edges = el("g", {});
+  svg.appendChild(edges);
+
+  // связи вход -> первый слой: толщина и яркость по весу внимания
+  if (midNodes.length) {
+    inNodes.forEach(node => {
+      const w = node.attention;
+      edges.appendChild(el("line", {
+        x1: node.x, y1: node.y, x2: midNodes[0].x, y2: midNodes[0].y,
+        stroke: heat(w), "stroke-width": Math.max(0.3, Math.min(3, w * 1.1)),
+        "stroke-opacity": Math.max(0.08, Math.min(0.65, w * 0.35))
+      }));
+    });
+    for (let i = 0; i < midNodes.length - 1; i++) {
+      edges.appendChild(el("line", {
+        x1: midNodes[i].x, y1: midNodes[i].y,
+        x2: midNodes[i + 1].x, y2: midNodes[i + 1].y,
+        stroke: "#3d5a78", "stroke-width": 3, "stroke-opacity": .55
+      }));
+    }
+    const last = midNodes[midNodes.length - 1];
+    outNodes.forEach(node => edges.appendChild(el("line", {
+      x1: last.x, y1: last.y, x2: node.x, y2: node.y,
+      stroke: "#3d5a78", "stroke-width": 1.6, "stroke-opacity": .45
+    })));
+  }
+
+  const dot = (node, radius, fill, html) => {
+    const circle = el("circle", {
+      cx: node.x, cy: node.y, r: radius, fill: fill,
+      stroke: "#0b0f14", "stroke-width": 1.5, class: "node"
+    });
+    circle.addEventListener("mousemove", e => showTip(e, html));
+    circle.addEventListener("mouseleave", hideTip);
+    svg.appendChild(circle);
+  };
+
+  inNodes.forEach(node => dot(node, 5 + Math.min(7, node.attention * 3.2),
+    heat(node.attention),
+    `<b>${node.title}</b>
+     <table>
+       <tr><td>вход сети</td><td>${node.name}</td></tr>
+       <tr><td>вес внимания</td><td>${num(node.attention)} ×</td></tr>
+       <tr><td>среднее</td><td>${num(node.mean, 3)}</td></tr>
+       <tr><td>разброс</td><td>${num(node.spread, 3)}</td></tr>
+     </table>
+     <span class="hint">Вес внимания — насколько сильно связи первого слоя
+     тянутся к этому прибору. 1.0 — как у среднего входа.</span>`));
+
+  midNodes.forEach(node => dot(node, 26, "#25405c",
+    `<b>${node.title}</b>
+     <table>
+       <tr><td>нейронов</td><td>${node.neurons}</td></tr>
+       <tr><td>живых</td><td>${node.alive}</td></tr>
+       <tr><td>средний вес</td><td>${num(node.stats.mean, 4)}</td></tr>
+       <tr><td>разброс весов</td><td>${num(node.stats.std, 4)}</td></tr>
+     </table>
+     <span class="hint">Отдельный нейрон скрытого слоя сам по себе ничего
+     не значит — показана сводка по слою целиком.</span>`));
+
+  outNodes.forEach(node => {
+    const sigma = node.sigma;
+    const sure = sigma === null ? .5 : Math.max(0, Math.min(1, 1 - sigma / 0.5));
+    dot(node, 11, `rgb(${Math.round(90 - sure * 40)},${Math.round(140 + sure * 60)},${Math.round(110 + sure * 20)})`,
+      `<b>${node.title}</b>
+       <table>
+         <tr><td>выход сети</td><td>${node.name}</td></tr>
+         <tr><td>разброс σ</td><td>${sigma === null ? "—" : num(sigma, 3)}</td></tr>
+         <tr><td>средняя команда</td><td>${node.command === null || node.command === undefined ? "—" : num(node.command, 3)}</td></tr>
+       </table>
+       <span class="hint">${node.hint}. Чем меньше σ, тем увереннее сеть.
+       Средняя команда у упора (±1) на оси, которая ни на что не влияет, —
+       тревожный признак: на следующей ступени она выстрелит.</span>`);
+    const label = el("text", {x: node.x + 18, y: node.y + 4, class: "big"});
+    label.textContent = node.title;
+    svg.appendChild(label);
+  });
+
+  const caption = (x, text) => {
+    const node = el("text", {x: x, y: 32, "text-anchor": "middle"});
+    node.textContent = text;
+    svg.appendChild(node);
+  };
+  caption(colX[0], "ПРИБОРЫ · " + inputs.length);
+  if (midNodes.length) caption((colX[1] + colX[2]) / 2, "ЯДРО · " + data.weights + " весов");
+  caption(colX[3], "РЕШЕНИЯ");
+}
+
+function fillSide(data) {
+  const stageKey = String(data.stage || 1);
+  const stages = (data.knowledge && data.knowledge.stages) || {};
+  const entry = stages[stageKey] || Object.values(stages).pop();
+  const skills = document.getElementById("skills");
+  const failures = document.getElementById("failures");
+  const sigmas = document.getElementById("sigmas");
+
+  skills.innerHTML = "";
+  if (entry && entry.skills && Object.keys(entry.skills).length) {
+    const order = ["liftoff","cleared_tower","supersonic","high_atmosphere",
+                   "space","orbit","clean_flight","smooth_steering","power_kept"];
+    const names = {liftoff:"Оторвался от стола", cleared_tower:"Набрал первый километр",
+      supersonic:"Прошёл звуковой барьер", high_atmosphere:"Дошёл до верхней атмосферы",
+      space:"Вышел в космос", orbit:"Вышел на орбиту",
+      clean_flight:"Долетел без разрушения", smooth_steering:"Рулил без скольжения",
+      power_kept:"Не посадил батарею"};
+    order.forEach(key => {
+      const skill = entry.skills[key];
+      if (!skill || !skill.attempts) return;
+      const box = document.createElement("div");
+      box.className = "skill";
+      box.innerHTML = `<div class="row"><span class="name">${names[key]}</span>
+        <span class="count">${skill.confirmations} · ${Math.round(skill.rate*100)}%</span></div>
+        <div class="bar"><span style="width:${Math.round(skill.rate*100)}%"></span></div>`;
+      skills.appendChild(box);
+    });
+  }
+  if (!skills.children.length)
+    skills.innerHTML = '<div class="fail">пока ничего не подтверждено</div>';
+
+  failures.innerHTML = "";
+  const fails = (data.run && data.run.failures) || (entry && entry.failures) || {};
+  Object.entries(fails).sort((a,b) => b[1]-a[1]).slice(0,7).forEach(([name, count]) => {
+    const row = document.createElement("div");
+    row.className = "fail";
+    row.innerHTML = `<span>${name}</span><span>${count}</span>`;
+    failures.appendChild(row);
+  });
+  if (!failures.children.length)
+    failures.innerHTML = '<div class="fail">нет данных</div>';
+
+  sigmas.innerHTML = "";
+  (data.outputs || []).forEach(out => {
+    if (out.sigma === null || out.sigma === undefined) return;
+    const row = document.createElement("div");
+    row.className = "fail";
+    const cmd = (out.command === null || out.command === undefined)
+      ? "" : ` · команда ${out.command >= 0 ? "+" : ""}${out.command.toFixed(2)}`;
+    const hot = Math.abs(out.command || 0) > 0.8 ? ' style="color:var(--bad)"' : "";
+    row.innerHTML = `<span>${out.title}</span><span${hot}>σ ${out.sigma.toFixed(3)}${cmd}</span>`;
+    sigmas.appendChild(row);
+  });
+  if (!sigmas.children.length)
+    sigmas.innerHTML = '<div class="fail">нет данных</div>';
+}
+
+function apply(data) {
+  document.getElementById("stage").textContent = data.stage || "—";
+  const t = data.training || {};
+  document.getElementById("decisions").textContent =
+    (t.decisions || 0).toLocaleString("ru-RU");
+  document.getElementById("episodes").textContent = t.episodes || 0;
+  document.getElementById("reward").textContent = num(t.mean_return, 1);
+  document.getElementById("orbits").textContent =
+    data.run ? data.run.orbits : "—";
+  document.getElementById("weights").textContent =
+    (data.weights || 0).toLocaleString("ru-RU");
+
+  const live = document.getElementById("live");
+  if (data.updated !== lastUpdated) { lastUpdated = data.updated; staleTicks = 0; }
+  else staleTicks++;
+  if (staleTicks > 4) {
+    live.textContent = "обучение стоит · " + data.updated;
+    live.className = "stale";
+  } else {
+    live.textContent = "идёт обучение · " + data.updated;
+    live.className = "";
+  }
+  draw(data);
+  fillSide(data);
+}
+
+async function tick() {
+  try {
+    const response = await fetch("data/brain_map.json?t=" + Date.now(),
+                                 {cache: "no-store"});
+    if (response.ok) apply(await response.json());
+  } catch (err) { /* сервер мог ещё не подняться — просто ждём */ }
+}
+tick();
+setInterval(tick, 2000);
+addEventListener("resize", () => lastUpdated && tick());
+</script>
+</body>
+</html>

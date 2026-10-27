@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Мозг KIA — трёхмерная карта</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --ink: #dbe4f5;
+    --dim: #7f8ca8;
+    --line: rgba(120, 150, 210, 0.18);
+    --panel: rgba(10, 15, 26, 0.82);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: var(--bg);
+    color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+  }
+  #sky { position: fixed; inset: 0; display: block; cursor: grab; }
+  #sky.dragging { cursor: grabbing; }
+
+  .panel {
+    position: fixed; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px);
+  }
+  #hud { top: 16px; left: 16px; min-width: 260px; }
+  #hud h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+  #hud .stage { color: #8fd7ff; font-size: 13px; margin-bottom: 10px; }
+  #hud dl { margin: 0; display: grid; grid-template-columns: auto auto; gap: 3px 14px; }
+  #hud dt { color: var(--dim); font-size: 12px; }
+  #hud dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  #hud .note {
+    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 11.5px; line-height: 1.4;
+  }
+
+  #legend { bottom: 16px; left: 16px; font-size: 12px; }
+  #legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  #legend i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  #legend .keys { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line);
+                  color: var(--dim); font-size: 11.5px; }
+
+  #card {
+    position: fixed; pointer-events: none; max-width: 320px; opacity: 0;
+    transition: opacity .12s; z-index: 5;
+  }
+  #card.on { opacity: 1; }
+  #card .t { font-weight: 600; margin-bottom: 3px; }
+  #card .h { color: #8fd7ff; font-size: 12px; margin-bottom: 6px; }
+  #card .d { color: var(--dim); font-size: 12px; white-space: pre-line; }
+
+  #alert {
+    top: 16px; left: 50%; transform: translateX(-50%); display: none;
+    color: #ffcf8f; border-color: rgba(255, 207, 143, .35);
+  }
+  #alert.on { display: block; }
+
+  /* Панели убираются целиком: карта — это картинка, и смотреть её иногда
+     хочется без единой рамки поверх. Выбор запоминается. */
+  #toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 6; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+    border-radius: 10px; padding: 7px 12px; font: inherit; font-size: 12px;
+    backdrop-filter: blur(6px); transition: color .15s, opacity .15s;
+  }
+  #toggle:hover { color: var(--ink); }
+  body.bare #hud, body.bare #legend { display: none; }
+  body.bare #toggle { opacity: .35; }
+  body.bare #toggle:hover { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<button id="toggle" title="Спрятать или вернуть панели (клавиша H)">скрыть панели</button>
+
+<div class="panel" id="hud">
+  <h1>Мозг KIA</h1>
+  <div class="stage" id="stage">загружаю…</div>
+  <dl>
+    <dt>Навыков полёта</dt><dd id="skills">—</dd>
+    <dt>Математика</dt><dd id="mathskills">—</dd>
+    <dt>Ракетостроение</dt><dd id="designskills">—</dd>
+    <dt>Нейронов проснулось</dt><dd id="awake">—</dd>
+    <dt>Обновлений весов</dt><dd id="updates">—</dd>
+    <dt>Эпизодов прожито</dt><dd id="episodes">—</dd>
+    <dt>Средняя за 20</dt><dd id="mean">—</dd>
+    <dt>Снимок</dt><dd id="updated">—</dd>
+  </dl>
+  <div class="note" id="note">
+    Скрытый нейрон не «отвечает» за что-то одно — это число, а не деталь.
+    Правдиво о нём можно сказать лишь то, на какие приборы он опирается и
+    насколько влияет на решение. Так подписи и сделаны.
+  </div>
+</div>
+
+<div class="panel" id="legend">
+  <div class="row"><i style="background:#ffd479"></i> навык полёта — что сеть уже умеет</div>
+  <div class="row"><i style="background:#78ebc8"></i> математика — раздел счёта манёвров</div>
+  <div class="row"><i style="background:#ff88b0"></i> ракетостроение — умение конструктора</div>
+  <div class="row"><i style="background:#5ad1ff"></i> вход — прибор, который она видит</div>
+  <div class="row"><i style="background:#b98cff"></i> нейрон внутреннего слоя</div>
+  <div class="row"><i style="background:#ff9f7a"></i> выход — решение</div>
+  <div class="keys">
+    колесо — влететь внутрь и обратно · зажатая кнопка — повернуть<br>
+    правая кнопка — сдвинуть · двойной щелчок по узлу — подлететь<br>
+    R — вернуть вид · H — спрятать панели
+  </div>
+</div>
+
+<div class="panel" id="card">
+  <div class="t"></div><div class="h"></div><div class="d"></div>
+</div>
+
+<div class="panel" id="alert"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Трёхмерная карта мозга без единой сторонней библиотеки.
+ *
+ * Почему без three.js: страница должна открываться на машине без
+ * интернета и без установок — ровно как остальной проект. Узлов здесь
+ * шестьсот, связей тысяча; для такого объёма хватает обычного canvas и
+ * честной перспективной проекции в пятнадцать строк.
+ * ------------------------------------------------------------------ */
+
+const SOURCE = "data/brain3d.json";
+const POLL_MS = 2000;
+
+const COLORS = {
+  core:   [210, 232, 255],
+  skill:  [255, 212, 121],
+  input:  [ 90, 209, 255],
+  neuron: [185, 140, 255],
+  output: [255, 159, 122],
+  math:   [120, 235, 200],     // математика манёвров
+  design: [255, 136, 176],     // конструктор ракет
+};
+const STAGE_TINT = [           // навыки разных ступеней различаются оттенком
+  [255, 212, 121], [156, 232, 168], [125, 200, 255], [231, 154, 255],
+];
+const SIZE = { core: 0, skill: 1.7, input: 0.95, neuron: 0.5, output: 1.3,
+               math: 1.5, design: 1.8 };
+
+const canvas = document.getElementById("sky");
+const ctx = canvas.getContext("2d");
+const card = document.getElementById("card");
+const alertBox = document.getElementById("alert");
+
+let data = null;
+let born = new Map();          // id -> когда узел впервые появился
+let hovered = null;
+let dpr = 1;
+
+/* --- камера: облёт вокруг точки и подлёт к ней ---------------------- */
+const cam = { yaw: 0.6, pitch: 0.32, dist: 165, px: 0, py: 0, pz: 0 };
+const HOME = { ...cam };
+
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.max(1, Math.floor(innerWidth * dpr));
+  canvas.height = Math.max(1, Math.floor(innerHeight * dpr));
+  canvas.style.width = innerWidth + "px";
+  canvas.style.height = innerHeight + "px";
+}
+
+/* Размер сверяем каждый кадр, а не только по событию resize.
+   Событие приходит не всегда: страница, открытая в фоновой вкладке или
+   в скрытой панели, стартует с нулевым окном, и одного слушателя мало —
+   холст так и остаётся 0x0, а карта выглядит сломанной. Сравнение двух
+   чисел стоит доли микросекунды, зато чинит это навсегда. */
+function syncSize() {
+  const w = Math.max(1, Math.floor(innerWidth * dpr));
+  const h = Math.max(1, Math.floor(innerHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) resize();
+}
+addEventListener("resize", resize);
+resize();
+
+/* --- ввод ----------------------------------------------------------- */
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
+  canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointerup", (e) => {
+  drag = null;
+  canvas.classList.remove("dragging");
+  try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+});
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("pointermove", (e) => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan) {
+      // сдвиг точки обзора в плоскости экрана — так гуляют внутри ядра
+      const b = basis();
+      const k = cam.dist * 0.0016;
+      cam.px -= (b.rx * dx - b.ux * dy) * k;
+      cam.py -= (b.ry * dx - b.uy * dy) * k;
+      cam.pz -= (b.rz * dx - b.uz * dy) * k;
+    } else {
+      cam.yaw -= dx * 0.005;
+      cam.pitch = Math.max(-1.45, Math.min(1.45, cam.pitch - dy * 0.005));
+    }
+  }
+  pointer.x = e.clientX; pointer.y = e.clientY; pointer.live = true;
+});
+canvas.addEventListener("pointerleave", () => { pointer.live = false; });
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  // экспоненциальный шаг: далеко — большими прыжками, вблизи — мелкими,
+  // иначе внутрь ядра не залететь аккуратно
+  cam.dist = Math.max(0.6, Math.min(420, cam.dist * Math.exp(e.deltaY * 0.0012)));
+}, { passive: false });
+
+canvas.addEventListener("dblclick", () => {
+  if (hovered) { cam.px = hovered.p[0]; cam.py = hovered.p[1]; cam.pz = hovered.p[2]; }
+});
+
+/* --- панели: спрятать и вернуть -------------------------------------- */
+const toggle = document.getElementById("toggle");
+
+function setBare(bare) {
+  document.body.classList.toggle("bare", bare);
+  toggle.textContent = bare ? "показать панели" : "скрыть панели";
+  try { localStorage.setItem("kia3d.bare", bare ? "1" : "0"); } catch (_) {}
+}
+setBare((() => {
+  try { return localStorage.getItem("kia3d.bare") === "1"; } catch (_) { return false; }
+})());
+toggle.addEventListener("click", () => setBare(!document.body.classList.contains("bare")));
+
+addEventListener("keydown", (e) => {
+  // раскладка может быть любой: ловим и латиницу, и кириллицу на тех же клавишах
+  const key = e.key.toLowerCase();
+  if (key === "r" || key === "к") Object.assign(cam, HOME);
+  if (key === "h" || key === "р") setBare(!document.body.classList.contains("bare"));
+});
+
+const pointer = { x: 0, y: 0, live: false };
+
+/* --- проекция ------------------------------------------------------- */
+function basis() {
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const fx = cp * sy, fy = sp, fz = cp * cy;          // взгляд
+  // право = normalize(cross(вперёд, мировой верх))
+  let rx = fz, ry = 0, rz = -fx;
+  const rl = Math.hypot(rx, ry, rz) || 1;
+  rx /= rl; ry /= rl; rz /= rl;
+  // верх = cross(право, вперёд)
+  const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+  return { fx, fy, fz, rx, ry, rz, ux, uy, uz,
+           ex: cam.px - fx * cam.dist,
+           ey: cam.py - fy * cam.dist,
+           ez: cam.pz - fz * cam.dist };
+}
+
+function project(p, b, focal, cx, cy) {
+  const vx = p[0] - b.ex, vy = p[1] - b.ey, vz = p[2] - b.ez;
+  const z = vx * b.fx + vy * b.fy + vz * b.fz;
+  if (z <= 0.35) return null;                       // за спиной камеры
+  const x = vx * b.rx + vy * b.ry + vz * b.rz;
+  const y = vx * b.ux + vy * b.uy + vz * b.uz;
+  const k = focal / z;
+  return { x: cx + x * k, y: cy - y * k, z, k };
+}
+
+/* --- данные --------------------------------------------------------- */
+async function poll() {
+  try {
+    const answer = await fetch(SOURCE + "?t=" + Date.now(), { cache: "no-store" });
+    if (!answer.ok) throw new Error("нет снимка (" + answer.status + ")");
+    const fresh = await answer.json();
+    const now = performance.now();
+    for (const node of fresh.nodes) if (!born.has(node.id)) born.set(node.id, now);
+    data = fresh;
+    fillHud(fresh);
+    alertBox.classList.remove("on");
+  } catch (err) {
+    alertBox.textContent = "Снимок мозга не читается: " + err.message
+      + ". Запусти BRAIN3D.bat заново.";
+    alertBox.classList.add("on");
+  }
+}
+
+function fillHud(d) {
+  const c = d.counts, t = d.training;
+  const mastered = d.nodes.filter((n) => n.kind === "skill" && n.mastered).length;
+  document.getElementById("stage").textContent =
+    "Ступень " + d.stage + " · " + (d.stage_title || "");
+  document.getElementById("skills").textContent = mastered + " из " + c.skills + " видимых";
+  const pr = d.programs || {};
+  document.getElementById("mathskills").textContent =
+    c.math ? (c.math_mastered + " из " + c.math + " разделов · ступень " + (pr.math_stage || 1))
+           : "тренажёр не пройден";
+  document.getElementById("designskills").textContent =
+    c.design ? (c.design_mastered + " из " + c.design + " умений · ступень " + (pr.builder_stage || 1))
+             : "тренажёр не пройден";
+  document.getElementById("awake").textContent = c.awake + " из " + c.hidden;
+  document.getElementById("updates").textContent = t.updates.toLocaleString("ru-RU");
+  document.getElementById("episodes").textContent = t.episodes.toLocaleString("ru-RU");
+  document.getElementById("mean").textContent =
+    (t.mean_return > 0 ? "+" : "") + t.mean_return.toFixed(1);
+  document.getElementById("updated").textContent = d.updated.slice(11);
+  if (c.skills === 0 && c.awake === 0 && !c.math && !c.design) {
+    document.getElementById("note").textContent =
+      "Мозг чист: знаний пока нет, поэтому вокруг ядра пусто. Запусти "
+      + "обучение — кружки начнут появляться сами.";
+  }
+}
+
+/* --- отрисовка ------------------------------------------------------ */
+function rgba(c, a) { return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a + ")"; }
+
+function colorOf(node) {
+  if (node.kind === "skill") return STAGE_TINT[(node.stage - 1) % STAGE_TINT.length];
+  return COLORS[node.kind] || COLORS.neuron;
+}
+
+function draw() {
+  syncSize();
+  const w = canvas.width, h = canvas.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#05070d";
+  ctx.fillRect(0, 0, w, h);
+
+  if (!data) { requestAnimationFrame(draw); return; }
+
+  const b = basis();
+  const focal = 0.5 * h / Math.tan(0.5 * (58 * Math.PI / 180));
+  const cx = w / 2, cy = h / 2;
+  const now = performance.now();
+
+  // 1. проекция всех узлов
+  const flat = new Map();
+  const drawn = [];
+  for (const node of data.nodes) {
+    const pt = project(node.pos, b, focal, cx, cy);
+    if (!pt) continue;
+    const age = Math.min(1, (now - (born.get(node.id) || now)) / 700);
+    const grow = age * age * (3 - 2 * age);          // мягкое появление
+    // Верхний предел радиуса обязателен: внутри облака отдельный нейрон
+    // оказывается в паре единиц от камеры, и без него он раздувается на
+    // весь экран — вместо карты получается белое пятно.
+    const r = Math.min(30 * dpr, Math.max(1.2, (SIZE[node.kind] || 0.6) * pt.k
+                       * (0.55 + 0.45 * node.strength) * grow));
+    const item = { node, x: pt.x, y: pt.y, z: pt.z, r, grow };
+    flat.set(node.id, item);
+    drawn.push(item);
+  }
+
+  // 2. связи — под узлами, дальние первыми
+  const wires = [];
+  for (const edge of data.edges) {
+    const a = flat.get(edge.a), c = flat.get(edge.b);
+    if (!a || !c) continue;
+    wires.push({ a, c, edge, z: (a.z + c.z) * 0.5 });
+  }
+  wires.sort((p, q) => q.z - p.z);
+  for (const wire of wires) {
+    const skill = wire.edge.kind === "skill";
+    const tint = skill ? colorOf(wire.a.node) : COLORS.neuron;
+    const fade = Math.max(0.05, Math.min(1, 90 / wire.z));
+    ctx.strokeStyle = rgba(tint, (skill ? 0.45 : 0.16) * wire.edge.w * fade
+                                 * Math.min(wire.a.grow, wire.c.grow));
+    ctx.lineWidth = (skill ? 1.6 : 1.0) * dpr;
+    ctx.beginPath();
+    ctx.moveTo(wire.a.x, wire.a.y);
+    ctx.lineTo(wire.c.x, wire.c.y);
+    ctx.stroke();
+  }
+
+  // 3. оболочка ядра — силуэт сферы. Изнутри гасим, иначе мешает смотреть
+  const core = data.core;
+  const cpt = project(core.pos, b, focal, cx, cy);
+  const away = Math.hypot(b.ex - core.pos[0], b.ey - core.pos[1], b.ez - core.pos[2]);
+  const inside = away < core.radius;
+  if (cpt && !inside) {
+    const rr = core.radius * cpt.k;
+    const glow = ctx.createRadialGradient(cpt.x, cpt.y, rr * 0.25, cpt.x, cpt.y, rr);
+    glow.addColorStop(0, "rgba(120,170,255,0.030)");
+    glow.addColorStop(1, "rgba(120,170,255,0.0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cpt.x, cpt.y, rr, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(140,190,255,0.28)";
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.setLineDash([6 * dpr, 7 * dpr]);
+    ctx.beginPath(); ctx.arc(cpt.x, cpt.y, rr, 0, 7); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 4. узлы — дальние первыми, ближние поверх
+  drawn.sort((p, q) => q.z - p.z);
+  let best = null, bestDist = Infinity;
+  const mx = pointer.x * dpr, my = pointer.y * dpr;
+  for (const item of drawn) {
+    const tint = colorOf(item.node);
+    // Дальние гаснут от расстояния, а те, что прямо в лице, — от близости:
+    // иначе пролёт сквозь облако превращается в засветку
+    const near = Math.min(1, Math.max(0.15, item.z / 3.5));
+    const fade = Math.max(0.12, Math.min(1, 120 / item.z)) * near;
+    const halo = ctx.createRadialGradient(item.x, item.y, 0, item.x, item.y, item.r * 2.6);
+    halo.addColorStop(0, rgba(tint, 0.5 * fade));
+    halo.addColorStop(1, rgba(tint, 0));
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(item.x, item.y, item.r * 2.6, 0, 7); ctx.fill();
+    ctx.fillStyle = rgba(tint, Math.min(1, 0.55 + 0.45 * item.node.strength) * fade);
+    ctx.beginPath(); ctx.arc(item.x, item.y, item.r, 0, 7); ctx.fill();
+    if (["skill", "math", "design"].includes(item.node.kind) && item.node.mastered) {
+      ctx.strokeStyle = rgba(tint, 0.9 * fade);
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath(); ctx.arc(item.x, item.y, item.r * 1.7, 0, 7); ctx.stroke();
+    }
+    if (pointer.live) {
+      const d = Math.hypot(item.x - mx, item.y - my);
+      if (d < Math.max(item.r + 6 * dpr, 13 * dpr) && d < bestDist) {
+        bestDist = d; best = item;
+      }
+    }
+  }
+
+  // Подписей у узлов нет намеренно: два с половиной десятка названий
+  // поверх облака превращают карту в текстовую кашу и закрывают то
+  // самое, ради чего в неё залетают. Название появляется при наведении.
+
+  hovered = best ? best.node : null;
+  showCard(best);
+  requestAnimationFrame(draw);
+}
+
+function showCard(item) {
+  if (!item) { card.classList.remove("on"); return; }
+  const node = item.node;
+  card.querySelector(".t").textContent = node.title;
+  card.querySelector(".h").textContent = node.hint || "";
+  card.querySelector(".d").textContent = node.detail || "";
+  card.classList.add("on");
+  const pad = 18;
+  let x = pointer.x + pad, y = pointer.y + pad;
+  if (x + card.offsetWidth > innerWidth - 8) x = pointer.x - card.offsetWidth - pad;
+  if (y + card.offsetHeight > innerHeight - 8) y = pointer.y - card.offsetHeight - pad;
+  card.style.left = x + "px";
+  card.style.top = y + "px";
+}
+
+poll();
+setInterval(poll, POLL_MS);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

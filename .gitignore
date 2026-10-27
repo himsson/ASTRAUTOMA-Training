@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+# Веса — результат обучения, они публикуются релизами, не в репозитории
+*.pth
+*.pt
+kia_global_memory.json
+kia_sim_knowledge.json
+kia_math_skills.json
+kia_evolution_manifest.txt
+
+# Локальное: пути к игре, кэш деталей, прогоны, журналы
+config.local.json
+data/*
+!data/.gitkeep
+!data/solar_system.json
+!data/reward_book.json
+!data/reference_norms.json
+logs/*
+!logs/.gitkeep
+kia/

@@ -1,0 +1,43 @@
+ASTRAUTOMA Training License
+Copyright (c) 2026 himsson — https://github.com/himsson/ASTRAUTOMA-Training
+
+The source code of the ASTRAUTOMA training tools is published so that anyone can read it,
+check what the program does and learn from it. It is not open source:
+the rights below are the only ones granted.
+
+YOU MAY
+
+1. Read, study and discuss the source code, and quote parts of it with
+   attribution to himsson and a link to the repository above.
+2. Run ASTRAUTOMA for any purpose, private or commercial, and keep as
+   many copies as you need for your own use.
+3. Clone or fork the repository in order to propose a change back to it
+   (a pull request or an issue), and modify your own copy for that
+   purpose or to make the program run on your machine.
+
+YOU MAY NOT
+
+4. Distribute ASTRAUTOMA, or any part of it, or anything derived from
+   it, to anyone else — modified or not, free or paid. Point people at
+   the official repository instead.
+5. Publish a fork as a project of its own, under this or any other name.
+6. Sell ASTRAUTOMA, charge for access to it, or include it in a product
+   or service you charge for.
+7. Remove or alter this licence, the NOTICE file, or the author's name.
+
+The trained weights published alongside the program are covered by the
+same terms.
+
+Permission beyond this licence may be requested from the author.
+
+NO WARRANTY. The software is provided "as is", without warranty of any
+kind, express or implied, including but not limited to the warranties of
+merchantability, fitness for a particular purpose and noninfringement.
+In no event shall the author be liable for any claim, damages or other
+liability, whether in an action of contract, tort or otherwise, arising
+from, out of or in connection with the software or the use or other
+dealings in the software.
+
+Kerbal Space Program is a trademark of Take-Two Interactive Software.
+ASTRAUTOMA is a fan-made tool and is not affiliated with Squad, Private
+Division or Take-Two. kRPC is a separate project by the kRPC authors.
