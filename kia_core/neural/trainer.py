@@ -499,6 +499,7 @@ class NeuralTrainer:
         report = TrainingReport(mode=f"конструктор: {stage.title}",
                                 stage=stage.number)
         started = time.time()
+        last_save = started
         obs = env.reset()
         episode_return = 0.0
 
@@ -895,6 +896,48 @@ class NeuralTrainer:
         return target
 
     # ------------------------------------------------------------------
+    def evaluate_crew(self, stage, episodes: int = 120) -> dict:
+        """Экзамен ступени «Аварии»: сколько экипажей вернулось живыми.
+
+        Считаются только те эпизоды, где отказ ДЕЙСТВИТЕЛЬНО сработал и
+        на борту были люди. Остальные к делу не относятся: на исправной
+        ракете спасать некого.
+
+        Почему это отдельный замер. Обычный экзамен ступени считает
+        орбиты, а орбиты на этой ступени дают те две трети полётов, где
+        ничего не сломалось. Первый прогон так и закончился: ступень
+        «сдана» за 47 секунд при средней награде −5.22, то есть экипажи
+        гибли, а орбит хватало. Орбитами аварийную подготовку не измерить.
+        """
+        from .spaces import FlightAction
+
+        agent = self.brain.pilot
+        faced = saved = 0
+        for n in range(episodes):
+            env = stage.make_env(goal_altitude=80_000.0, seed=500_000 + n,
+                                 exploring_starts=0.0)
+            env.set_difficulty(1.0)
+            obs = env.reset()
+            done = False
+            while not done and self.running:
+                mask = env.action_mask()
+                _o, continuous, discrete, _lp, _v = agent.act(
+                    obs, deterministic=True, action_mask=mask,
+                    update_normalizer=False)
+                obs, _r, done, _info = env.step(FlightAction(
+                    float(continuous[0]), float(continuous[1]),
+                    float(continuous[2]), float(continuous[3]),
+                    bool(int(discrete[0].item()))))
+            if not self.running:
+                break
+            summary = env.episode_summary()
+            if not summary.get("failures") or not summary.get("crew"):
+                continue
+            faced += 1
+            saved += int(bool(summary.get("crew_saved")))
+        return {"faced": faced, "saved": saved,
+                "rate": (saved / faced) if faced else 0.0}
+
     def evaluate_pilot(self, episodes: int = 10,
                        goal_altitude: float = 80_000.0, stage=None) -> dict:
         """Прогон без обучения: проверка, чему научилась сеть.

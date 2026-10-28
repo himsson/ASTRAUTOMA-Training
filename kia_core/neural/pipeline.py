@@ -60,6 +60,13 @@ from . import curriculum as program
 
 log = get_logger("neural.pipeline")
 
+# Доля эпизодов с отказом на ступени «Аварии» — нужна, чтобы
+# прикинуть, сколько всего полётов прогнать ради нужного числа
+# аварий (см. neural/failures.py).
+from .failures import FAILURE_RATE as FAILURE_SHARE
+# Доля полётов с экипажем на борту (см. sim_env_plus.roll_failure).
+CREW_SHARE = 0.5
+
 MANIFEST_FILE = ROOT / "kia_evolution_manifest.txt"
 FINAL_MODEL_FILE = ROOT / "kia_model_final.pth"
 
@@ -490,6 +497,8 @@ class EvolutionPipeline:
             stage=stage)
         orbits = int(result.get("orbits", 0))
         if orbits >= config.confirm_orbits:
+            if not self.confirm_crew(stage):
+                return False
             self.record("confirm", stage.number,
                         f"Проверка без шума: {orbits}/"
                         f"{config.confirm_episodes} орбит, награда "
@@ -504,6 +513,40 @@ class EvolutionPipeline:
                     f"{result.get('mean_return', 0.0):+.1f}. Орбиты делал "
                     f"разброс действий, а не политика — учимся дальше",
                     beep=False)
+        return False
+
+    def confirm_crew(self, stage) -> bool:
+        """Второй вопрос ступени «Аварии»: а экипаж-то живой?
+
+        Орбиты на этой ступени набираются теми полётами, где ничего не
+        сломалось, — их две трети. Поэтому орбитного экзамена мало: он
+        один раз уже пропустил политику, у которой средняя награда была
+        −5.22, то есть люди гибли. Здесь спрашивается прямо: из аварий,
+        которые действительно случились, сколько экипажей вернулось.
+        """
+        exam = getattr(stage, "crew_exam", None)
+        if not exam:
+            return True
+        need_faced, need_rate = exam
+        # Нужная авария — это отказ И экипаж на борту: 35 % на половину,
+        # то есть примерно каждый шестой полёт. Берём с запасом, иначе
+        # экзамен не наберёт выборку и завалит ступень на пустом месте.
+        share = max(0.05, FAILURE_SHARE * CREW_SHARE)
+        result = self.trainer.evaluate_crew(
+            stage, episodes=int(need_faced / share * 1.3))
+        faced, rate = result["faced"], result["rate"]
+        if faced >= need_faced and rate >= need_rate:
+            self.record("confirm", stage.number,
+                        f"Аварийный экзамен: спасено {result['saved']} из "
+                        f"{faced} экипажей ({rate:.0%}) — засчитано",
+                        beep=False)
+            return True
+        self.exam.reject_promotion(self.config.confirm_cooldown)
+        self.record("reject", stage.number,
+                    f"Аварийный экзамен НЕ сдан: спасено "
+                    f"{result['saved']} из {faced} экипажей ({rate:.0%}), "
+                    f"нужно {need_rate:.0%} и не меньше {need_faced} "
+                    f"аварий — учимся дальше", beep=False)
         return False
 
     # ------------------------------------------------------------------
