@@ -70,7 +70,22 @@ class FailureState:
     alternator: bool = True        # генератор жив
     leak_per_second: float = 0.0   # кг/с мимо камеры
     control_bias: float = 0.0      # постоянный увод рулей, доля команды
+    # Номер ступени, вместе с которой уйдёт поломка. Прогар сопла, мёртвая
+    # камера и течь принадлежат той ступени, которая горела: сбросишь её —
+    # следующая запустится целой, и в игре это первое, что делает пилот.
+    # Залипший сепаратор, мёртвый генератор и уведённые рули остаются с
+    # аппаратом: они не в баке.
+    stage_bound: int | None = None
     history: list = field(default_factory=list)
+
+    def separated(self, stage_index: int) -> bool:
+        """Ступень ушла — ушла ли с ней поломка. True, если полегчало."""
+        if self.stage_bound is None or stage_index <= self.stage_bound:
+            return False
+        self.engine_scale = 1.0
+        self.leak_per_second = 0.0
+        self.stage_bound = None
+        return True
 
     @property
     def broken(self) -> bool:

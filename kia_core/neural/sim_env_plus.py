@@ -334,6 +334,11 @@ class HardcoreAscentSimulator(AscentSimulator):
         self.fault = FailureState()
         self.pending_failure = None
         self.landed_safely = False
+        # Можно ли было после этого отказа долететь. Ставится в момент
+        # срабатывания, по устройству мира, а не по тому, что потом
+        # сделал пилот: иначе критерий «не бросай исправную ракету»
+        # обходится тем, что ракету бросают не попробовав.
+        self.recoverable = False
         # Экипаж в половине эпизодов: сеть должна одинаково уверенно
         # вести и беспилотник, где можно рискнуть железом, и пилотируемый
         # аппарат, где рисковать нечем.
@@ -354,6 +359,20 @@ class HardcoreAscentSimulator(AscentSimulator):
             return
         stage = self.current_stage
         apply(pending, self.fault, stage.fuel_mass if stage else 0.0)
+        last = self.stage_index >= len(self.stages) - 1
+        if pending.kind in ("engine_out", "thrust_loss", "fuel_leak"):
+            # Сломалась камера или потёк бак — это принадлежит горящей
+            # ступени, а не всей ракете. Сбросишь её — поломка уйдёт с ней.
+            self.fault.stage_bound = self.stage_index
+            # Поправимо ровно тогда, когда есть что сбросить.
+            self.recoverable = not last
+        elif pending.kind == "stage_stuck":
+            # Залипший сепаратор смертелен, пока внизу осталась ступень:
+            # мёртвый груз не вывести. На последней он ничего не меняет.
+            self.recoverable = last
+        else:
+            # Мёртвый генератор и уведённые рули полёт не отменяют.
+            self.recoverable = True
         if not self.fault.alternator:
             # генератор мёртв: дальше только то, что осталось в батарее
             self.EC_ALTERNATOR = 0.0
@@ -435,6 +454,22 @@ class HardcoreAscentSimulator(AscentSimulator):
     # ------------------------------------------------------------------
     # 2. Таймаут ступеней
     # ------------------------------------------------------------------
+    def dead_stage(self) -> bool:
+        """Ступень, которая уже не тянет и годится только на сброс.
+
+        Обычное правило мира — ступень отделяют пустой: везти полный бак
+        вниз незачем, и сеть не должна учиться выбрасывать топливо. При
+        мёртвой камере правило обратное: бак полон, но тяги с него не
+        будет никогда, и каждая его тонна — это мёртвый груз. В игре
+        такую ступень сбрасывают вместе с топливом, и здесь тоже.
+
+        Порог по тяге, а не по нулю: двигатель, потерявший половину, ещё
+        работает, и выбрасывать его — ошибка. Решает сеть, мир только
+        разрешает.
+        """
+        return (self.fault.stage_bound == self.stage_index
+                and self.fault.engine_scale < 0.35)
+
     def can_separate(self) -> bool:
         if self.fault.stage_stuck:
             self.stage_blocked += 1
@@ -442,10 +477,14 @@ class HardcoreAscentSimulator(AscentSimulator):
         if self.time < self.stage_ready_at:
             self.stage_blocked += 1
             return False
+        if self.dead_stage():
+            return (self.current_stage is not None
+                    and self.stage_index < len(self.stages) - 1)
         return super().can_separate()
 
     def separate(self) -> None:
         super().separate()
+        self.fault.separated(self.stage_index)
         self.stage_ready_at = self.time + self.STAGE_COOLDOWN
         # межступенчатый разъём тоже питается от батареи
         self.electric = max(0.0, self.electric - 5.0)
@@ -482,10 +521,25 @@ class HardcoreAscentSimulator(AscentSimulator):
         севшей батарее кнопка оставалась недоступной, и экипаж на
         сорвавшемся полёте было уже нечем спасать — замер показал восемь
         таких безвыходных потерь из тридцати шести.
+
+        «Сбрасывать нечего» здесь означает устройство ракеты, а не
+        секундомер: пауза межступенчатого разъёма отделение запрещает,
+        но ступень под ногами от этого никуда не делась. Считать такую
+        паузу безвыходностью значило бы открыть увод кабины на пару
+        секунд после каждого отделения — и сеть научилась бы ждать их.
         """
         if not (self.FAILURES and self.fault.broken and not self.aborted
                 and self.airborne and not self.reached_orbit):
             return False
+        if self.stage_index < len(self.stages) - 1 and not self.fault.stage_stuck:
+            # Ступень под ногами есть — кнопка сбрасывает её, и это
+            # правильный ход. Кроме одного случая: полёт уже кончился,
+            # аппарат пошёл вниз или его опрокинуло. Ступенями этого не
+            # исправить, а запереть людей на падающей ракете ради
+            # экономии железа нельзя.
+            if self._vertical_speed() > 0.0 and not self.tumbled:
+                return False
+            return True
         return not self.can_separate()
 
     # ------------------------------------------------------------------
@@ -626,6 +680,7 @@ class HardcoreAscentSimulator(AscentSimulator):
             "stage_blocked": self.stage_blocked,
             "wind_offset": round(self.wind_offset, 2),
             "tumbled": self.tumbled,
+            "recoverable": self.recoverable,
         })
         return summary
 
