@@ -528,10 +528,13 @@ class EvolutionPipeline:
         if not exam:
             return True
         need_faced, need_rate = exam
-        # Нужная авария — это отказ И экипаж на борту: 35 % на половину,
-        # то есть примерно каждый шестой полёт. Берём с запасом, иначе
-        # экзамен не наберёт выборку и завалит ступень на пустом месте.
-        share = max(0.05, FAILURE_SHARE * CREW_SHARE)
+        # Нужная авария — это отказ И экипаж на борту. Доли берём у самой
+        # ступени, а не из констант модуля: ступень их переопределяет, и
+        # разъехавшаяся оценка выборки стоила бы завала на пустом месте.
+        options = dict(stage.env_options)
+        share = (options.get("failure_rate", FAILURE_SHARE)
+                 * options.get("crew_share", CREW_SHARE))
+        share = max(0.05, share)
         result = self.trainer.evaluate_crew(
             stage, episodes=int(need_faced / share * 1.3))
         faced, rate = result["faced"], result["rate"]

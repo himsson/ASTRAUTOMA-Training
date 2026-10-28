@@ -98,7 +98,9 @@ class HardcoreAscentSimulator(AscentSimulator):
 
     # ------------------------------------------------------------------
     def __init__(self, *args, mechanics: bool = True,
-                 failures: bool | None = None, **kwargs):
+                 failures: bool | None = None,
+                 failure_rate: float | None = None,
+                 crew_share: float = 0.5, **kwargs):
         """mechanics=False — тот же мир, но с идеальным интерфейсом.
 
         Скрытые механики (задержка команд, ветер, батарея, раскрутка
@@ -116,6 +118,11 @@ class HardcoreAscentSimulator(AscentSimulator):
         self.mechanics = bool(mechanics)
         if failures is not None:
             self.FAILURES = bool(failures)
+        # Доля отказов и доля полётов с экипажем задаются ступенью.
+        # На ступени, где учат спасать, ломается каждый полёт и люди на
+        # борту всегда: иначе градиент размазывается по исправным рейсам.
+        self.failure_rate = failure_rate
+        self.crew_share = float(crew_share)
         super().__init__(*args, **kwargs)
         if not self.mechanics:
             self.LAG_SECONDS = 0.0        # команда доходит мгновенно
@@ -144,6 +151,11 @@ class HardcoreAscentSimulator(AscentSimulator):
         self.aoa_violations = 0
         self.stage_blocked = 0
         self.tumbled = False
+        self.aborted = False
+        self.chute_open = False
+        self.abandoned = 0.0
+        self.body_area = AscentSimulator.body_area
+        self.BREAKUP_PRESSURE = AscentSimulator.BREAKUP_PRESSURE
         self.roll_failure()
 
     # ------------------------------------------------------------------
@@ -153,6 +165,79 @@ class HardcoreAscentSimulator(AscentSimulator):
     # удар смертельным. Ниже него касание грунта переживают и аппарат,
     # и люди.
     SOFT_TOUCHDOWN = 12.0
+
+    # ------------------------------------------------------------------
+    # Отделяемая кабина
+    # ------------------------------------------------------------------
+    # Без неё ступень «Аварии» была нечестной задачей. Замер: скриптовый
+    # пилот с идеальным тормозным импульсом спасал 0 экипажей из 34 —
+    # ракета на спуске разрушалась скоростным напором в 30 случаях из 34.
+    # Дело не в политике: корпус с лобовой площадью ракеты, падающий с
+    # сорока километров, проходит 45 кПа раньше, чем успевает затормозить.
+    # В самой игре экипаж в такой ситуации спасает не манёвр, а кнопка
+    # аварийного увода: кабина уходит от ракеты, тормозит щитом и садится
+    # под куполом. Этого в тренажёре не было — значит, учили невозможному.
+    #
+    # Числа подобраны по кораблям игры: кабина Mk1-3 с щитом весит около
+    # полутора тонн, купол Mk16 держит её у земли на шести метрах в
+    # секунду, а щит терпит вчетверо больший напор, чем голый корпус.
+    CAPSULE_MASS = 1500.0          # кг — кабина, щит, купол
+    CAPSULE_AREA = 3.1              # м² — щит диаметром два метра
+    CAPSULE_CD = 1.2                # тупое тело тормозит, а не режет воздух
+    CAPSULE_BREAKUP = 180_000.0    # Па — щит держит вчетверо больше корпуса
+    CHUTE_CD = 1.0
+    CHUTE_TERMINAL = 6.0           # м/с — с какой скоростью купол сажает
+    CHUTE_ALTITUDE = 2_500.0       # м — ниже этого купол раскрывается
+    CHUTE_MAX_Q = 15_000.0         # Па — выше купол рвёт потоком
+
+    @property
+    def chute_area(self) -> float:
+        """Площадь купола — из той скорости, с какой он должен сажать.
+
+        Задавать площадь в квадратных метрах бессмысленно: она зависит от
+        модели сопротивления, а проверяема здесь одна величина — скорость
+        касания. Поэтому площадь считается из неё, а не подбирается.
+        """
+        weight = self.CAPSULE_MASS * 9.81
+        v = self.CHUTE_TERMINAL
+        return 2.0 * weight / (KERBIN_SEA_DENSITY * self.CHUTE_CD * v * v)
+
+    def abort_capsule(self) -> None:
+        """Увести кабину с аварийной ракеты.
+
+        Всё, что ниже кабины, остаётся позади: масса падает до полутора
+        тонн, тяги больше нет и не будет, зато щит держит вход, а ниже
+        двух с половиной километров раскрывается купол. Дальше от пилота
+        не требуется ничего — и в этом вся суть кнопки увода.
+        """
+        if self.aborted:
+            return
+        self.aborted = True
+        # Что осталось на ракете, то и потеряно: за это платят деньгами.
+        self.abandoned = max(0.0, self.mass - self.CAPSULE_MASS) / 1000.0
+        self.stages = [SimStage(dry_mass=self.CAPSULE_MASS, fuel_mass=0.0,
+                                thrust_vac=0.0, thrust_asl=0.0,
+                                isp_vac=1.0, isp_asl=1.0)]
+        self.stage_index = 0
+        self.body_area = self.CAPSULE_AREA
+        self.BREAKUP_PRESSURE = self.CAPSULE_BREAKUP
+        self.throttle = 0.0
+        # Трёхмерный тренажёр считает моменты по геометрии ступеней —
+        # её тоже надо пересобрать, иначе кабина полетит с плечами
+        # выброшенной ракеты.
+        if hasattr(self, "build_geometry"):
+            self.build_geometry()
+
+    def update_chute(self) -> None:
+        """Купол: раскрывается низко и только если поток не рвёт его."""
+        if not self.aborted or self.chute_open:
+            return
+        if self.altitude > self.CHUTE_ALTITUDE:
+            return
+        if self.dynamic_pressure() > self.CHUTE_MAX_Q:
+            return
+        self.chute_open = True
+        self.body_area = self.chute_area
 
     def step(self, action):
         """Шаг плюс две развязки, которых нет на ступенях без отказов.
@@ -177,15 +262,48 @@ class HardcoreAscentSimulator(AscentSimulator):
             done = False
             reward += 2.0                 # тот самый штраф за обрыв
             info.pop("reason", None)
+            # Проверки конца эпизода в базовом тренажёре идут цепочкой
+            # elif, и на пустых баках до лимита времени дело не доходит.
+            # Сняв обрыв по топливу, лимит приходится держать самому —
+            # иначе падение длится бесконечно.
+            if self.time >= self.max_time:
+                self.done = True
+                done = True
+                info["reason"] = "лимит времени"
 
-        if not done and self.airborne and self.altitude <= 0.5:
+        # Кабина вышла на установившийся спуск под куполом: дальше
+        # смотреть нечего, исход решён. Досиживать эти несколько минут
+        # полезного сигнала не даёт, а стоит десяти тысяч шагов.
+        if (not done and self.aborted and self.chute_open
+                and abs(self._vertical_speed()) < 2.0 * self.CHUTE_TERMINAL):
+            self.done = True
+            done = True
+            self.landed_safely = True
+            info["reason"] = "кабина под куполом"
+            reward += self.crew_reward(saved=True)
+            return obs, reward, done, info
+
+        # Орбита с людьми на борту — тоже спасённый экипаж, и платить
+        # за неё надо не меньше, чем за посадку под куполом. Пока
+        # премия шла только за посадку, увод кабины стоил сети столько
+        # же, сколько выполненный полёт.
+        if done and self.reached_orbit:
+            reward += self.crew_reward(saved=True)
+        elif not done and self.airborne and self.altitude <= 0.5:
             self.done = True
             done = True
             self.landed_safely = True
             info["reason"] = "мягкая посадка"
             reward += self.crew_reward(saved=True)
         elif done and not self.reached_orbit and not self.landed_safely:
-            reward += self.crew_reward(saved=False)
+            # Лимит времени — это конец замера, а не конец полёта: аппарат
+            # ещё летит, и чем кончится, никто не знает. Платить за него
+            # как за погибший экипаж значит наказывать политику за приговор,
+            # которого не выносили. Такой эпизод просто не считается.
+            if info.get("reason") != "лимит времени":
+                reward += self.crew_reward(saved=False)
+            else:
+                info["crew_saved"] = None
         return obs, reward, done, info
 
     def crew_reward(self, saved: bool) -> float:
@@ -197,10 +315,18 @@ class HardcoreAscentSimulator(AscentSimulator):
         любой экономии, какую может дать риск. Сеть, которой выгодно
         поберечь ступень ценой людей, — это ровно то, чего быть не должно.
         """
-        if self.crew:
-            return 60.0 if saved else -120.0
-        mass = max(0.0, self.mass) / 1000.0        # тонны
-        return 2.0 * mass if saved else -1.0 * mass
+        value = 60.0 if saved else -120.0
+        if not self.crew:
+            mass = max(0.0, self.mass) / 1000.0    # тонны
+            value = 2.0 * mass if saved else -1.0 * mass
+        # Брошенная ракета — это деньги, и платить за неё приходится
+        # даже тогда, когда люди дома. Иначе увод кабины обходится сети
+        # даром, и она уводит её при любой поломке: замер показал 43
+        # увода на 45 аварий, из них больше половины — отказы, с
+        # которыми ракета ещё долетела бы. Цена в тоннах заведомо меньше
+        # цены экипажа, так что порядок решений не меняется: сначала
+        # люди, и только потом железо.
+        return value - self.abandoned
 
     def roll_failure(self) -> None:
         """Бросок на отказ для этого эпизода (см. neural/failures.py)."""
@@ -211,13 +337,14 @@ class HardcoreAscentSimulator(AscentSimulator):
         # Экипаж в половине эпизодов: сеть должна одинаково уверенно
         # вести и беспилотник, где можно рискнуть железом, и пилотируемый
         # аппарат, где рисковать нечем.
-        self.crew = self.FAILURES and self.rng.random() < 0.5
+        self.crew = self.FAILURES and self.rng.random() < self.crew_share
         if not self.mechanics or not self.FAILURES:
             return
         # Ожидаемая длительность выведения — ориентир, когда «интересно»
         # ломаться. Точность тут не нужна: отказ всё равно раскидывается
         # по окну в несколько минут.
-        self.pending_failure = roll(self.rng, self.difficulty, 300.0)
+        self.pending_failure = roll(self.rng, self.difficulty, 300.0,
+                                    rate=self.failure_rate)
 
     def fire_failure(self) -> None:
         """Пора ли сработать отказу. Зовётся каждый шаг до физики."""
@@ -327,18 +454,56 @@ class HardcoreAscentSimulator(AscentSimulator):
         allowed = super().action_mask()
         if self.time < self.stage_ready_at:
             allowed[1] = False
+        # На сломанной ракете та же кнопка означает увод кабины, и
+        # разрешена она тогда, когда обычное отделение невозможно, —
+        # иначе маска запрещала бы единственный способ спастись.
+        if self.abort_available():
+            allowed[1] = True
         return allowed
+
+    def drag_coefficient(self, mach: float) -> float:
+        if self.chute_open:
+            return self.CHUTE_CD
+        if self.aborted:
+            return self.CAPSULE_CD
+        return super().drag_coefficient(mach)
+
+    def abort_available(self) -> bool:
+        """Стала ли кнопка отделения кнопкой увода кабины.
+
+        Правило одно: на сломанной ракете, когда сбрасывать нечего,
+        отделение означает увод. Пока под ногами есть отработавшая
+        ступень, кнопка работает по прямому назначению — сбросить её и
+        лететь дальше; как только сбрасывать нечего, та же команда
+        уводит кабину.
+
+        Так остаются обе возможности сразу, и выбирает между ними сеть.
+        Привязывать увод к виду отказа было ошибкой: при уводе рулей или
+        севшей батарее кнопка оставалась недоступной, и экипаж на
+        сорвавшемся полёте было уже нечем спасать — замер показал восемь
+        таких безвыходных потерь из тридцати шести.
+        """
+        if not (self.FAILURES and self.fault.broken and not self.aborted
+                and self.airborne and not self.reached_orbit):
+            return False
+        return not self.can_separate()
 
     # ------------------------------------------------------------------
     # 3. Ветер, 5. инерция тяги, 6. расход заряда
     # ------------------------------------------------------------------
     def apply_command(self, command: FlightAction) -> None:
         self.fire_failure()
+        # Команда отделения на сломанной ракете, когда сбрасывать нечего,
+        # и есть увод кабины. Отдельной кнопки у сети нет и не будет:
+        # набор действий обязан совпадать с тем, что уходит в игру.
+        if command.stage and self.abort_available():
+            self.abort_capsule()
         super().apply_command(command)
         self.spend_electricity(command)
         self.blow_wind()
         self.spool_engine()
         self.leak_fuel()
+        self.update_chute()
 
     def spend_electricity(self, command: FlightAction) -> None:
         """Заряд тратится на удержание рулей и — втрое дороже — на перекладку.
@@ -435,6 +600,10 @@ class HardcoreAscentSimulator(AscentSimulator):
         failure = super().check_failure()      # разрушение напором — общее
         if failure is not None:
             return failure
+        # Кабина тупым концом вперёд — это её штатное положение, а не
+        # потеря устойчивости: «правильного» угла атаки у неё нет.
+        if self.aborted:
+            return None
         limit = self.ease(self.AOA_TUMBLE, self.AOA_TUMBLE_EASY)
         if (self.dynamic_pressure() > self.TUMBLE_PRESSURE
                 and self.angle_of_attack() > limit):

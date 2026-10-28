@@ -83,13 +83,17 @@ class FailureState:
                 "engine_scale": round(self.engine_scale, 3)}
 
 
-def roll(rng: random.Random, difficulty: float, flight_time: float) -> Failure | None:
+def roll(rng: random.Random, difficulty: float, flight_time: float,
+         rate: float | None = None) -> Failure | None:
     """Бросок на отказ для одного эпизода.
 
     difficulty 0 — отказов нет вообще (так устроена первая ступень
-    программы и все прежние замеры), 1 — полная доля FAILURE_RATE.
+    программы и все прежние замеры), 1 — полная доля. Долю задаёт
+    ступень: на обычной это FAILURE_RATE, на той, где учат спасать
+    экипаж, — единица.
     """
-    if difficulty <= 0.0 or rng.random() > FAILURE_RATE * difficulty:
+    share = FAILURE_RATE if rate is None else float(rate)
+    if difficulty <= 0.0 or rng.random() > share * difficulty:
         return None
     kind = rng.choices(KINDS, weights=WEIGHTS, k=1)[0]
     at = flight_time * rng.uniform(*WINDOW)

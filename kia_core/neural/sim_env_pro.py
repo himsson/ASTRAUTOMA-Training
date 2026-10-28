@@ -455,12 +455,17 @@ class PrecisionAscentSimulator(HardcoreAscentSimulator):
         self.fire_failure()
         if command.stage and self.can_separate():
             self.separate()
+        elif command.stage and self.abort_available():
+            # сбрасывать нечего, ракета сломана — кнопка уводит кабину
+            # (см. HardcoreAscentSimulator.abort_capsule)
+            self.abort_capsule()
         self.throttle = max(0.0, min(1.0, command.throttle))
         self.control = (command.pitch, command.yaw, command.roll)
         self.spend_electricity(command)
         self.blow_wind()
         self.spool_engine()
         self.leak_fuel()
+        self.update_chute()
 
     def blow_wind(self) -> None:
         """Порыв сносит нос по обеим осям."""
@@ -509,6 +514,8 @@ class PrecisionAscentSimulator(HardcoreAscentSimulator):
             mach = air_speed / self.speed_of_sound(altitude)
             self.max_mach = max(self.max_mach, mach)
             drag = q * self.drag_coefficient(mach) * self.body_area
+            # см. AscentSimulator.integrate: потолок импульса сопротивления
+            drag = min(drag, mass * air_speed / self.dt)
             force = _add(force, _scale(_unit(air), -drag))
 
             # нормальная сила: тело под углом атаки работает как крыло

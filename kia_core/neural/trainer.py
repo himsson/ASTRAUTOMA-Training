@@ -919,12 +919,13 @@ class NeuralTrainer:
             env.set_difficulty(1.0)
             obs = env.reset()
             done = False
+            info: dict = {}
             while not done and self.running:
                 mask = env.action_mask()
                 _o, continuous, discrete, _lp, _v = agent.act(
                     obs, deterministic=True, action_mask=mask,
                     update_normalizer=False)
-                obs, _r, done, _info = env.step(FlightAction(
+                obs, _r, done, info = env.step(FlightAction(
                     float(continuous[0]), float(continuous[1]),
                     float(continuous[2]), float(continuous[3]),
                     bool(int(discrete[0].item()))))
@@ -932,6 +933,10 @@ class NeuralTrainer:
                 break
             summary = env.episode_summary()
             if not summary.get("failures") or not summary.get("crew"):
+                continue
+            # Замер оборвали на полпути — чем кончился полёт, неизвестно.
+            # Такой эпизод не свидетельство ни за, ни против.
+            if info.get("reason") == "лимит времени":
                 continue
             faced += 1
             saved += int(bool(summary.get("crew_saved")))

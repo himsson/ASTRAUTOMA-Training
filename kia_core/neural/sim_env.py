@@ -850,6 +850,12 @@ class AscentSimulator:
             mach = air_speed / self.speed_of_sound(altitude)
             drag = (0.5 * rho * air_speed * air_speed
                     * self.drag_coefficient(mach) * self.body_area)
+            # Сопротивление тормозит, но никогда не разворачивает поток:
+            # импульс за шаг не может превысить сам импульс аппарата.
+            # Без этого потолка явная схема взрывается на всём, что
+            # тормозит резко, — парашют уводил скорость в минус и обратно
+            # с нарастанием, пока «напор» не убивал кабину.
+            drag = min(drag, mass * air_speed / self.dt)
             ax -= drag * air_x / air_speed / mass
             ay -= drag * air_y / air_speed / mass
 
