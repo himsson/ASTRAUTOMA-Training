@@ -527,7 +527,7 @@ class EvolutionPipeline:
         exam = getattr(stage, "crew_exam", None)
         if not exam:
             return True
-        need_faced, need_rate = exam
+        need_faced, need_rate, need_flown = exam
         # Нужная авария — это отказ И экипаж на борту. Доли берём у самой
         # ступени, а не из констант модуля: ступень их переопределяет, и
         # разъехавшаяся оценка выборки стоила бы завала на пустом месте.
@@ -538,18 +538,23 @@ class EvolutionPipeline:
         result = self.trainer.evaluate_crew(
             stage, episodes=int(need_faced / share * 1.3))
         faced, rate = result["faced"], result["rate"]
-        if faced >= need_faced and rate >= need_rate:
+        flown = result["flown_rate"]
+        if faced >= need_faced and rate >= need_rate and flown >= need_flown:
             self.record("confirm", stage.number,
                         f"Аварийный экзамен: спасено {result['saved']} из "
-                        f"{faced} экипажей ({rate:.0%}) — засчитано",
+                        f"{faced} экипажей ({rate:.0%}), доведено до орбиты "
+                        f"{result['flown']} из {result['flyable']} "
+                        f"поправимых ({flown:.0%}) — засчитано",
                         beep=False)
             return True
         self.exam.reject_promotion(self.config.confirm_cooldown)
         self.record("reject", stage.number,
                     f"Аварийный экзамен НЕ сдан: спасено "
-                    f"{result['saved']} из {faced} экипажей ({rate:.0%}), "
+                    f"{result['saved']} из {faced} экипажей ({rate:.0%}, "
                     f"нужно {need_rate:.0%} и не меньше {need_faced} "
-                    f"аварий — учимся дальше", beep=False)
+                    f"аварий), доведено до орбиты {result['flown']} из "
+                    f"{result['flyable']} поправимых ({flown:.0%}, нужно "
+                    f"{need_flown:.0%}) — учимся дальше", beep=False)
         return False
 
     # ------------------------------------------------------------------

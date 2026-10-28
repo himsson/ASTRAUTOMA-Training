@@ -913,6 +913,7 @@ class NeuralTrainer:
 
         agent = self.brain.pilot
         faced = saved = 0
+        flyable = flown = 0
         for n in range(episodes):
             env = stage.make_env(goal_altitude=80_000.0, seed=500_000 + n,
                                  exploring_starts=0.0)
@@ -940,8 +941,16 @@ class NeuralTrainer:
                 continue
             faced += 1
             saved += int(bool(summary.get("crew_saved")))
+            # Отказ, после которого двигатель ещё тянет, — это не повод
+            # бросать ракету: полёт можно довести. Считаем такие отдельно,
+            # иначе экзамен сдаётся уводом кабины на каждой поломке.
+            if summary.get("engine_scale", 0.0) >= 0.5:
+                flyable += 1
+                flown += int(bool(summary.get("orbit")))
         return {"faced": faced, "saved": saved,
-                "rate": (saved / faced) if faced else 0.0}
+                "rate": (saved / faced) if faced else 0.0,
+                "flyable": flyable, "flown": flown,
+                "flown_rate": (flown / flyable) if flyable else 1.0}
 
     def evaluate_pilot(self, episodes: int = 10,
                        goal_altitude: float = 80_000.0, stage=None) -> dict:
